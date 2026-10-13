@@ -36,14 +36,17 @@ jobs:
 
       - name: Build installer
         env:
-          # the key has no password, so no password variable may be set at all
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -o pipefail
-          unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is missing"; exit 1
           fi
+          # the bundler wants a password-protected key: wrap it with an empty password
+          KEY=$(python scripts/encrypt_key.py)
+          echo "::add-mask::$KEY"
+          export TAURI_SIGNING_PRIVATE_KEY="$KEY"
+          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
           npm run tauri build 2>&1 | tee build.log || {
             # surface the end of the log as an annotation so the failure is readable anywhere
             tail -n 60 build.log | sed 's/\x1b\[[0-9;]*m//g' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log('::error title=build failed::'+s.replace(/%/g,'%25').replace(/\r/g,'').replace(/\n/g,'%0A')))"
