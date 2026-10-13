@@ -1,0 +1,45 @@
+name: Release
+
+# Builds the Windows installer and publishes a GitHub release.
+# Run it from the Actions tab ("Run workflow") after bumping the version,
+# or push a tag like v0.2.0. The installed app picks the new release up
+# by itself through latest.json.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - run: npm install
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        with:
+          tagName: v__VERSION__
+          releaseName: 'Grabber v__VERSION__'
+          releaseBody: '처음 설치할 때는 Grabber_x.x.x_x64-setup.exe를 받아 실행하세요. 이미 설치돼 있으면 앱이 새 버전을 알아서 받아요.'
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

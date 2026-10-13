@@ -1,0 +1,33 @@
+name: Check
+
+# Quick compile check on every push, so a broken build shows up
+# before anyone runs a release.
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Frontend syntax
+        run: node --check src/app.js
+
+      - name: Rust check
+        working-directory: src-tauri
+        run: cargo check
+
+      - name: Core logic tests
+        working-directory: src-tauri
+        run: cargo test --lib

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grabber</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="titlebar" id="titlebar" data-tauri-drag-region>
+  <div class="brand" id="brand" data-tauri-drag-region>
+    <span class="logo"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#12140A" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="M6 11l6 6 6-6"/><path d="M5 20h14"/></svg></span>
+    <b>Grabber</b><span>유튜브 다운로더</span>
+  </div>
+  <div class="brand hidden" id="backTitle" data-tauri-drag-region style="pointer-events:auto">
+    <button class="tb-btn" id="btnBack" aria-label="뒤로" style="color:var(--text)"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <b>설정</b>
+  </div>
+  <div class="tb-right">
+    <button class="tb-btn" id="btnSettings" aria-label="설정"><svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg></button>
+    <span class="tb-sep" id="tbSep" aria-hidden="true"></span>
+    <button class="tb-btn" id="btnMin" aria-label="최소화"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M1 6h10"/></svg></button>
+    <button class="tb-btn" id="btnMax" aria-label="최대화"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="1.5" width="9" height="9" rx="1"/></svg></button>
+    <button class="tb-btn close" id="btnClose" aria-label="닫기"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9"/></svg></button>
+  </div>
+</header>
+
+<!-- first run -->
+<main id="view-setup" class="setup hidden">
+  <div class="setup-inner">
+    <div style="display:flex;flex-direction:column;gap:10px;align-items:flex-start">
+      <span class="big-logo"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#12140A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="M6 11l6 6 6-6"/><path d="M5 20h14"/></svg></span>
+      <h1>처음 한 번만 준비할게요</h1>
+      <p>다운로드에 필요한 도구를 받는 중이에요. 다음부터는 바로 시작돼요.</p>
+    </div>
+    <div id="setupSteps" style="display:flex;flex-direction:column;gap:10px"></div>
+    <div id="setupError" class="hidden" style="display:flex;flex-direction:column;gap:12px;align-items:flex-start">
+      <div class="error-text" id="setupErrorText"></div>
+      <button class="btn-primary sm" id="btnSetupRetry">다시 시도</button>
+    </div>
+    <p class="hint">모든 도구는 사용자 폴더에 설치돼서 관리자 권한이 필요 없어요.</p>
+  </div>
+</main>
+
+<!-- compose -->
+<div id="view-main" class="scroll hidden">
+  <div class="wrap">
+    <section class="section">
+      <div class="label-row">
+        <label class="label" for="url">링크</label>
+        <span class="note hidden" id="clipNote">클립보드에서 링크를 가져왔어요</span>
+      </div>
+      <div class="urlbox">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B8E97" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+        <input id="url" type="url" spellcheck="false" autocomplete="off" placeholder="유튜브 링크를 붙여넣으세요">
+        <button class="icon-btn" id="btnClear" aria-label="링크 지우기"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+    </section>
+
+    <section class="card" id="preview" aria-label="영상 정보"></section>
+
+    <section class="cols hidden" id="options">
+      <div class="col wide">
+        <div class="section">
+          <div class="label-row"><h3 class="label">화질</h3><span class="hint">예상 용량</span></div>
+          <div class="list" id="qualityList" role="group" aria-label="화질 선택"></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="section">
+          <div class="label-row"><h3 class="label">자막</h3><span class="hint" id="subFmtHint"></span></div>
+          <div class="list" id="subList" role="group" aria-label="자막 선택"></div>
+        </div>
+        <div class="section">
+          <h3 class="label">함께 받기</h3>
+          <div class="list" id="extraList" role="group" aria-label="추가 파일"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <button class="btn-primary" id="btnDownload" disabled>
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="M6 11l6 6 6-6"/><path d="M5 20h14"/></svg>
+        <span id="btnDownloadText">다운로드</span><kbd>Enter</kbd>
+      </button>
+      <div class="label-row" style="font-size:13px;color:var(--muted)">
+        <span style="display:inline-flex;align-items:center;gap:8px;min-width:0">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          저장 위치: <span id="outDirText" class="ellipsis selectable" style="color:var(--text)"></span>
+        </span>
+        <span style="display:inline-flex;gap:14px"><a id="lnkOpenDir">열기</a><a id="lnkChangeDir">변경</a></span>
+      </div>
+      <a class="hidden" id="lnkQueue" style="font-size:13px"></a>
+    </section>
+
+    <section class="files hidden" id="recentBox">
+      <div class="label-row" style="margin-bottom:6px"><h3 class="label">최근 받은 파일</h3><a id="lnkRecentAll" style="font-size:13px">모두 보기</a></div>
+      <div id="recentList"></div>
+    </section>
+  </div>
+</div>
+
+<!-- queue -->
+<div id="view-queue" class="scroll hidden">
+  <div class="wrap">
+    <div class="urlbox">
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B8E97" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+      <input id="addUrl" aria-label="링크 추가" type="url" spellcheck="false" autocomplete="off" placeholder="링크를 붙여넣으면 화질을 골라 대기열에 추가해요" style="font-family:inherit">
+      <button class="btn" id="btnAdd" style="font-size:14px;font-weight:600;border:0;background:#26282E">추가</button>
+    </div>
+    <div id="queueBody" style="display:flex;flex-direction:column;gap:22px"></div>
+  </div>
+</div>
+
+<!-- settings -->
+<div id="view-settings" class="scroll hidden">
+  <div class="wrap" style="gap:20px">
+    <section class="panel">
+      <div class="panel-head">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <h2>다운로드 엔진</h2>
+          <span class="muted" style="font-size:13px" id="engineSub">유튜브가 바뀌면 엔진 업데이트로 해결돼요</span>
+        </div>
+        <button class="btn-primary sm" id="btnEngineUpdate">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>
+          <span id="btnEngineUpdateText">지금 업데이트</span>
+        </button>
+      </div>
+      <div class="list" id="toolList"></div>
+      <div class="cols" style="gap:16px">
+        <div class="col" style="gap:10px">
+          <h3 class="label">자동 업데이트</h3>
+          <div class="list" id="autoList"></div>
+        </div>
+        <div class="col" style="gap:10px">
+          <h3 class="label">업데이트 채널</h3>
+          <div class="list" id="channelList" role="group" aria-label="업데이트 채널"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>기본 다운로드 설정</h2>
+      <div class="list">
+        <div class="kv">
+          <span>저장 폴더</span>
+          <span style="display:inline-flex;align-items:center;gap:12px;min-width:0">
+            <span class="muted ellipsis selectable" style="font-size:13px;max-width:420px" id="setOutDir"></span>
+            <button class="btn sm" id="btnSetDir">변경</button>
+          </span>
+        </div>
+        <div class="kv">
+          <label for="selName">파일 이름</label>
+          <select id="selName">
+            <option value="title_id">제목 [영상 ID]</option>
+            <option value="title">제목</option>
+            <option value="date_title">날짜 - 제목</option>
+          </select>
+        </div>
+        <div class="kv">
+          <span style="display:flex;flex-direction:column;gap:2px">
+            <label for="selCookie">로그인 쿠키</label>
+            <span class="muted" style="font-size:12px">연령 제한·멤버십 영상에만 필요해요</span>
+          </span>
+          <select id="selCookie">
+            <option value="">사용 안 함</option>
+            <option value="firefox">Firefox</option>
+            <option value="edge">Edge</option>
+            <option value="chrome">Chrome</option>
+          </select>
+        </div>
+      </div>
+      <div class="cols" style="gap:16px">
+        <div class="col" style="gap:10px">
+          <h3 class="label">자막 언어</h3>
+          <div class="list" id="langList" role="group" aria-label="자막 언어"></div>
+        </div>
+        <div class="col" style="gap:10px">
+          <h3 class="label">자막 형식</h3>
+          <div class="list" id="subFmtList" role="group" aria-label="자막 형식"></div>
+        </div>
+      </div>
+      <div class="cols" style="gap:16px">
+        <div class="col" style="gap:10px">
+          <h3 class="label">썸네일 형식</h3>
+          <div class="list" id="thumbFmtList" role="group" aria-label="썸네일 형식"></div>
+        </div>
+        <div class="col"></div>
+      </div>
+    </section>
+
+    <section class="panel" style="flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <h2>앱 정보</h2>
+        <span class="muted" style="font-size:13px" id="appInfo"></span>
+      </div>
+      <button class="btn" id="btnAppUpdate" style="font-size:14px">업데이트 확인</button>
+    </section>
+  </div>
+</div>
+
+<footer class="statusbar" id="statusbar">
+  <span id="statusLeft"></span>
+  <span id="statusRight"></span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
