@@ -17,7 +17,7 @@ yt-dlp 기반 윈도우용 유튜브 다운로더. 링크를 붙여넣고 버튼
 ## 새 버전 배포
 
 1. `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `package.json`의 버전을 올립니다.
-2. GitHub Actions의 **Release** 워크플로를 실행합니다 (또는 `v0.2.0` 같은 태그를 푸시).
+2. `release` 브랜치에 푸시하거나 GitHub Actions의 **Release** 워크플로를 실행합니다.
 3. 설치 파일과 `latest.json`이 담긴 릴리스가 만들어지고, 설치된 앱이 이를 감지합니다.
 
 릴리스 빌드에는 저장소 Secret `TAURI_SIGNING_PRIVATE_KEY`(업데이트 서명 키)가 필요합니다.

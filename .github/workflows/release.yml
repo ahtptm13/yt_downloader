@@ -1,14 +1,14 @@
 name: Release
 
 # Builds the Windows installer and publishes a GitHub release.
-# Run it from the Actions tab ("Run workflow") after bumping the version,
-# or push a tag like v0.2.0. The installed app picks the new release up
-# by itself through latest.json.
+# After bumping the version, push to the `release` branch or use
+# "Run workflow" in the Actions tab. The tag v<version> is created here,
+# and the installed app picks the new release up through latest.json.
 
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
+    branches: ['release']
 
 permissions:
   contents: write
