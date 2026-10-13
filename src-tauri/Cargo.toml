@@ -1,6 +1,6 @@
 [package]
 name = "grabber"
-version = "0.1.0"
+version = "0.1.1"
 description = "yt-dlp 기반 유튜브 다운로더"
 edition = "2021"
 

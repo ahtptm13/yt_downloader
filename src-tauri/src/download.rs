@@ -28,6 +28,7 @@ struct JobDone {
     cancelled: bool,
     file: Option<String>,
     error: Option<String>,
+    warning: Option<String>,
 }
 
 fn cookie_args(cookies: &Option<String>) -> Vec<String> {
@@ -115,8 +116,9 @@ pub async fn start_download(app: AppHandle, jobs: State<'_, Jobs>, job: Job) -> 
             })
             .await;
         }
-        let success = child.wait().await.map(|s| s.success()).unwrap_or(false);
+        let exited_ok = child.wait().await.map(|s| s.success()).unwrap_or(false);
         let stderr_text = err_task.await.unwrap_or_default();
+        let success = exited_ok && !logic::has_hard_error(&stderr_text);
         let state = app2.state::<Jobs>();
         state.pids.lock().unwrap().remove(&id);
         let cancelled = state.cancelled.lock().unwrap().remove(&id);
@@ -131,6 +133,7 @@ pub async fn start_download(app: AppHandle, jobs: State<'_, Jobs>, job: Job) -> 
                 cancelled,
                 file: tracker.file.clone(),
                 error: (!success && !cancelled).then(|| logic::friendly_error(&stderr_text)),
+                warning: logic::subtitle_warning(&stderr_text),
             },
         );
     });

@@ -400,7 +400,9 @@ pub fn output_template(name_tpl: &str, playlist: bool) -> String {
 pub fn build_args(j: &Job, bin_dir: &str, deno_path: Option<&str>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     let mut push = |x: &str| a.push(x.to_string());
-    for x in ["--newline", "--progress", "--no-mtime", "--no-colors"] {
+    // --ignore-errors turns a failed subtitle into a warning instead of
+    // failing the whole video; real failures still exit non-zero
+    for x in ["--newline", "--progress", "--no-mtime", "--no-colors", "--ignore-errors"] {
         push(x);
     }
     push("--progress-template");
@@ -443,6 +445,9 @@ pub fn build_args(j: &Job, bin_dir: &str, deno_path: Option<&str>) -> Vec<String
         }
         push("--sub-langs");
         push(&j.sub_langs.join(","));
+        // YouTube rate-limits caption requests fired back to back
+        push("--sleep-subtitles");
+        push("1");
         let embed = j.sub_format == "embed" && j.kind == "video";
         if embed {
             push("--embed-subs");
@@ -631,6 +636,41 @@ pub fn friendly_error(stderr: &str) -> String {
     }
 }
 
+/// With --ignore-errors a broken merge or conversion still exits 0,
+/// so any ERROR line other than a skipped subtitle means the job failed.
+pub fn has_hard_error(stderr: &str) -> bool {
+    stderr.lines().any(|l| l.trim_start().starts_with("ERROR:"))
+}
+
+/// Subtitles that could not be fetched, as one Korean line, or None.
+pub fn subtitle_warning(stderr: &str) -> Option<String> {
+    let mut langs: Vec<String> = Vec::new();
+    let mut limited = false;
+    for l in stderr.lines() {
+        if let Some(i) = l.find("Unable to download video subtitles for '") {
+            let rest = &l[i + "Unable to download video subtitles for '".len()..];
+            if let Some(end) = rest.find('\'') {
+                let lang = rest[..end].to_string();
+                if !langs.contains(&lang) {
+                    langs.push(lang);
+                }
+            }
+            if l.contains("429") {
+                limited = true;
+            }
+        }
+    }
+    if langs.is_empty() {
+        return None;
+    }
+    let why = if limited {
+        "유튜브가 자막 요청을 잠시 막았어요. 자동 번역 자막에서 자주 생겨요"
+    } else {
+        "자막 서버에서 받지 못했어요"
+    };
+    Some(format!("자막 {}개를 받지 못했어요 ({}) · {}", langs.len(), langs.join(", "), why))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,7 +747,7 @@ mod tests {
         let a = build_args(&j, "C:/bin", Some("C:/bin/deno.exe"));
         let dash = a.iter().position(|x| x == "--").unwrap();
         assert_eq!(dash, a.len() - 2, "url comes right after --");
-        for want in ["--write-subs", "--write-auto-subs", "--convert-subs", "--write-thumbnail", "--no-playlist", "--merge-output-format"] {
+        for want in ["--write-subs", "--write-auto-subs", "--convert-subs", "--write-thumbnail", "--no-playlist", "--merge-output-format", "--ignore-errors", "--sleep-subtitles"] {
             assert!(a.contains(&want.to_string()), "missing {}", want);
         }
         assert!(a.contains(&"deno:C:/bin/deno.exe".to_string()));
@@ -739,6 +779,16 @@ mod tests {
         let mut pl = Tracker::new("video");
         let p = pl.feed("[download] Downloading item 3 of 20").unwrap();
         assert_eq!((p.item, p.items), (Some(3), Some(20)));
+    }
+
+    #[test]
+    fn subtitle_failures_are_warnings_not_errors() {
+        let err = "WARNING: Unable to download video subtitles for 'ko': HTTP Error 429: Too Many Requests\n";
+        assert!(!has_hard_error(err));
+        let w = subtitle_warning(err).unwrap();
+        assert!(w.contains("ko") && w.contains("막았어요"), "{}", w);
+        assert!(subtitle_warning("WARNING: something else").is_none());
+        assert!(has_hard_error("ERROR: Postprocessing: Conversion failed!"));
     }
 
     #[test]

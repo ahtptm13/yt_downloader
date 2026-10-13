@@ -150,7 +150,8 @@ function defaultSubs(p) {
   const { primary } = subRows(p);
   for (const r of primary) {
     const base = r.code.split('-')[0];
-    if (settings.langs.includes(base)) set.add(r.code);
+    // machine-translated captions are often refused by YouTube (HTTP 429), so leave them unticked
+    if (settings.langs.includes(base) && r.kindText !== '자동 번역') set.add(r.code);
   }
   return set;
 }
@@ -372,6 +373,7 @@ function onDone(ev) {
   const j = S.jobs.find((x) => x.id === ev.id);
   if (!j) return;
   j.file = ev.file || null;
+  j.warning = ev.warning || '';
   if (ev.ok) {
     j.status = 'done';
     S.recent.unshift({
@@ -474,7 +476,8 @@ function renderQueue() {
     html += `<section class="files"><h3 class="label" style="margin-bottom:6px">완료</h3>
       ${done.map((j) => `<div class="file">
         <span class="thumb sm" ${thumbStyle(j.thumbnail)}></span>
-        <div class="main"><span class="ellipsis">${esc(j.title)}</span><span class="ellipsis" style="font-size:12px;color:var(--muted)">${esc(j.summary)}</span></div>
+        <div class="main"><span class="ellipsis">${esc(j.title)}</span><span class="ellipsis" style="font-size:12px;color:var(--muted)">${esc(j.summary)}</span>
+          ${j.warning ? `<span style="font-size:12px;color:var(--warn);line-height:1.5">${esc(j.warning)}</span>` : ''}</div>
         <button class="btn" data-act="reveal-job" data-id="${esc(j.id)}">폴더 열기</button></div>`).join('')}</section>`;
   }
   $('queueBody').innerHTML = html;
