@@ -54,7 +54,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM0ODAzQUU5MEQxMzA4MkIKUldRckNCTU42VHFBTkczbTBPRnJIV3JHYU83M2h4RENtL1NIeGdtdDh1T29JeFUxT2kxRzFnNlIK",
       "endpoints": [
-        "https://github.com/__GITHUB_REPO__/releases/latest/download/latest.json"
+        "https://github.com/ahtptm13/yt_downloader/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"
