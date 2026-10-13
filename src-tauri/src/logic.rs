@@ -16,8 +16,12 @@ pub struct Quality {
     pub size: Option<u64>,
     /// value passed to yt-dlp -f
     pub format: String,
-    /// "video" | "mp3" | "m4a"
+    /// "video" | "mp3" | "m4a" | "opus"
     pub kind: String,
+    /// "auto" keeps the original streams (WebM when AV1/VP9 + Opus), "mp4" forces MP4
+    pub container: String,
+    /// what the file will be: "WebM", "MP4", "MP3"...
+    pub ext: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -49,6 +53,8 @@ pub struct Job {
     pub video_id: Option<String>,
     pub format: String,
     pub kind: String,
+    #[serde(default)]
+    pub container: String,
     pub sub_langs: Vec<String>,
     pub write_subs: bool,
     pub write_auto_subs: bool,
@@ -104,23 +110,15 @@ fn codec_name(vc: &str) -> &'static str {
     }
 }
 
-fn codec_rank(vc: &str, height: u64) -> u8 {
-    let c = codec_name(vc);
-    if height <= 1080 {
-        // up to 1080p prefer H.264 so the file opens in any editor
-        match c {
-            "H.264" => 4,
-            "VP9" => 3,
-            "AV1" => 2,
-            _ => 1,
-        }
-    } else {
-        match c {
-            "AV1" => 4,
-            "VP9" => 3,
-            "H.264" => 2,
-            _ => 1,
-        }
+/// Quality order for picking the best stream at one height, the same order
+/// yt-dlp itself uses: AV1 > VP9 > HEVC > H.264.
+fn codec_rank(vc: &str) -> u8 {
+    match codec_name(vc) {
+        "AV1" => 4,
+        "VP9" => 3,
+        "HEVC" => 2,
+        "H.264" => 1,
+        _ => 0,
     }
 }
 
@@ -128,66 +126,49 @@ fn is_sdr(f: &Value) -> bool {
     matches!(f["dynamic_range"].as_str(), None | Some("SDR"))
 }
 
-pub fn audio_rows(best_audio: Option<u64>, best_m4a: Option<u64>) -> Vec<Quality> {
-    vec![
-        Quality {
-            id: "mp3".into(),
-            label: "음원".into(),
-            detail: "MP3 변환".into(),
-            role: String::new(),
-            size: best_audio,
-            format: "ba/b".into(),
-            kind: "mp3".into(),
-        },
-        Quality {
-            id: "m4a".into(),
-            label: "음원".into(),
-            detail: "M4A · 원본 음질".into(),
-            role: String::new(),
-            size: best_m4a,
-            format: "ba[ext=m4a]/ba/b".into(),
-            kind: "m4a".into(),
-        },
-    ]
+fn q(id: &str, label: &str, detail: &str, role: &str, size: Option<u64>, format: &str, kind: &str, container: &str, ext: &str) -> Quality {
+    Quality {
+        id: id.into(),
+        label: label.into(),
+        detail: detail.into(),
+        role: role.into(),
+        size,
+        format: format.into(),
+        kind: kind.into(),
+        container: container.into(),
+        ext: ext.into(),
+    }
+}
+
+pub fn audio_rows(best_audio: Option<u64>, best_m4a: Option<u64>, best_is_opus: bool) -> Vec<Quality> {
+    let mut v = vec![q("mp3", "음원", "MP3 변환", "", best_audio, "ba/b", "mp3", "auto", "MP3")];
+    if best_is_opus {
+        v.push(q("opus", "음원", "Opus · 최고 음질 원본", "", best_audio, "ba/b", "opus", "auto", "Opus"));
+    }
+    v.push(q("m4a", "음원", "M4A · 편집 호환", "", best_m4a, "ba[ext=m4a]/ba/b", "m4a", "auto", "M4A"));
+    v
 }
 
 /// Generic choices when individual formats are unknown (playlists).
 pub fn presets() -> Vec<Quality> {
     let mut v = vec![
-        Quality {
-            id: "vbest".into(),
-            label: "최고".into(),
-            detail: "가장 높은 해상도".into(),
-            role: "best".into(),
-            size: None,
-            format: "bv*+ba[ext=m4a]/bv*+ba/b".into(),
-            kind: "video".into(),
-        },
-        Quality {
-            id: "v1080".into(),
-            label: "1080p".into(),
-            detail: "H.264 MP4".into(),
-            role: "edit".into(),
-            size: None,
-            format: "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[height<=1080]/b".into(),
-            kind: "video".into(),
-        },
-        Quality {
-            id: "v720".into(),
-            label: "720p".into(),
-            detail: "H.264 MP4".into(),
-            role: String::new(),
-            size: None,
-            format: "bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]/b[height<=720]/b".into(),
-            kind: "video".into(),
-        },
+        q("vbest", "최고", "가장 높은 해상도 · 원본 코덱", "best", None, "bv*+ba/b", "video", "auto", "WebM"),
+        q("e1080", "1080p", "H.264 MP4", "edit", None, "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[height<=1080]/b", "video", "mp4", "MP4"),
+        q("v720", "720p", "원본 코덱", "", None, "bv*[height<=720]+ba/b[height<=720]/b", "video", "auto", "WebM"),
     ];
-    v.extend(audio_rows(None, None));
+    v.extend(audio_rows(None, None, true));
     v
 }
 
 fn pick_max<'a>(items: &[&'a Value], key: impl Fn(&Value) -> (u8, u8, i64, i64)) -> Option<&'a Value> {
     items.iter().copied().max_by_key(|f| key(f))
+}
+
+fn fps_detail(v: &Value, codec: &str) -> String {
+    match num(&v["fps"]).map(|x| x.round() as i64) {
+        Some(f) if f > 0 => format!("{}fps · {}", f, codec),
+        _ => codec.to_string(),
+    }
 }
 
 pub fn qualities_from(info: &Value) -> Vec<Quality> {
@@ -212,8 +193,7 @@ pub fn qualities_from(info: &Value) -> Vec<Quality> {
         .filter(|f| s(&f["ext"]) == "m4a" || acodec(f).starts_with("mp4a"))
         .collect();
     let best_m4a = pick_max(&m4as, |f| (0, 0, abr(f), 0));
-    // pair video with AAC audio when possible: plays and edits everywhere
-    let merge_audio = best_m4a.or(best_audio);
+    let best_is_opus = best_audio.map(|a| acodec(a).starts_with("opus")).unwrap_or(false);
 
     let mut vids: Vec<&Value> = formats
         .iter()
@@ -224,12 +204,25 @@ pub fn qualities_from(info: &Value) -> Vec<Quality> {
         vids = formats.iter().filter(|f| is_video(f)).collect();
     }
     if vids.is_empty() {
-        let mut v = audio_rows(best_audio.and_then(fsize), best_m4a.and_then(fsize));
+        let mut v = audio_rows(best_audio.and_then(fsize), best_m4a.and_then(fsize), best_is_opus);
         if let Some(first) = v.first_mut() {
             first.role = "best".into();
         }
         return v;
     }
+
+    // video + audio pair, the -f value with a fallback, and the size
+    let pair = |v: &Value, a: Option<&Value>, h: u64| -> (String, Option<u64>) {
+        let vid = s(&v["format_id"]);
+        let (main, size) = if !separate {
+            (vid.to_string(), fsize(v))
+        } else if let Some(a) = a {
+            (format!("{}+{}", vid, s(&a["format_id"])), fsize(v).map(|x| x + fsize(a).unwrap_or(0)))
+        } else {
+            (format!("{}+ba", vid), fsize(v))
+        };
+        (format!("{}/bv*[height<={h}]+ba/b[height<={h}]/b", main, h = h), size)
+    };
 
     let heights: BTreeSet<u64> = vids.iter().filter_map(|f| f["height"].as_u64()).collect();
     let max_h = *heights.iter().next_back().unwrap_or(&0);
@@ -241,66 +234,53 @@ pub fn qualities_from(info: &Value) -> Vec<Quality> {
         let at: Vec<&Value> = vids
             .iter()
             .copied()
-            .filter(|f| f["height"].as_u64() == Some(h))
+            .filter(|f| f["height"].as_u64() == Some(h) && !s(&f["format_id"]).is_empty())
             .collect();
-        let best = pick_max(&at, |f| {
+        let key = |f: &Value| {
             (
                 is_sdr(f) as u8,
-                codec_rank(vcodec(f), h),
+                codec_rank(vcodec(f)),
                 num(&f["fps"]).unwrap_or(0.0) as i64,
                 (num(&f["tbr"]).unwrap_or(0.0) * 10.0) as i64,
             )
-        });
-        let Some(v) = best else { continue };
-        let vid = s(&v["format_id"]);
-        if vid.is_empty() {
-            continue;
-        }
-        let fps = num(&v["fps"]).map(|x| x.round() as i64);
-        let codec = codec_name(vcodec(v));
-        let mut detail = match fps {
-            Some(f) if f > 0 => format!("{}fps · {}", f, codec),
-            _ => codec.to_string(),
         };
-        if codec == "H.264" {
-            detail.push_str(" MP4");
-        }
-        if !is_sdr(v) {
+        let Some(best) = pick_max(&at, key) else { continue };
+        let codec = codec_name(vcodec(best));
+        let mp4_codec = codec == "H.264" || codec == "HEVC";
+        // AV1/VP9 keep the best audio (Opus) in WebM; H.264 pairs with AAC in MP4
+        let audio = if mp4_codec { best_m4a.or(best_audio) } else { best_audio };
+        let (format, size) = pair(best, audio, h);
+        let mut detail = fps_detail(best, codec);
+        if !is_sdr(best) {
             detail.push_str(" · HDR");
         }
-        let (format, size) = if separate {
-            match merge_audio {
-                Some(a) => (
-                    format!("{}+{}", vid, s(&a["format_id"])),
-                    fsize(v).map(|x| x + fsize(a).unwrap_or(0)),
-                ),
-                None => (format!("{}+ba", vid), fsize(v)),
+        let ext = if mp4_codec || audio.map(|a| !acodec(a).starts_with("opus")).unwrap_or(false) { "MP4" } else { "WebM" };
+        rows.push(q(&format!("v{}", h), &format!("{}p", h), &detail, "", size, &format, "video", "auto", ext));
+
+        // an extra MP4 row that opens in any editor, for the highest H.264 height up to 1080p
+        let already_edit = rows.iter().any(|r| r.role == "edit");
+        if h <= 1080 && !already_edit && !mp4_codec {
+            let avcs: Vec<&Value> = at.iter().copied().filter(|f| codec_name(vcodec(f)) == "H.264" && is_sdr(f)).collect();
+            if let Some(avc) = pick_max(&avcs, key) {
+                let (format, size) = pair(avc, best_m4a.or(best_audio), h);
+                rows.push(q(
+                    &format!("e{}", h),
+                    &format!("{}p", h),
+                    &format!("{} MP4", fps_detail(avc, "H.264")),
+                    "edit",
+                    size,
+                    &format,
+                    "video",
+                    "mp4",
+                    "MP4",
+                ));
             }
-        } else {
-            (vid.to_string(), fsize(v))
-        };
-        rows.push(Quality {
-            id: format!("v{}", h),
-            label: format!("{}p", h),
-            detail,
-            role: String::new(),
-            size,
-            // fall back to a nearby format if this exact one disappears
-            format: format!("{}/bv*[height<={h}]+ba/b[height<={h}]/b", format, h = h),
-            kind: "video".into(),
-        });
+        }
     }
     if let Some(first) = rows.first_mut() {
         first.role = "best".into();
     }
-    if let Some(edit) = rows
-        .iter_mut()
-        .skip(1)
-        .find(|r| r.detail.contains("H.264"))
-    {
-        edit.role = "edit".into();
-    }
-    rows.extend(audio_rows(best_audio.and_then(fsize), best_m4a.and_then(fsize)));
+    rows.extend(audio_rows(best_audio.and_then(fsize), best_m4a.and_then(fsize), best_is_opus));
     rows
 }
 
@@ -431,9 +411,16 @@ pub fn build_args(j: &Job, bin_dir: &str, deno_path: Option<&str>) -> Vec<String
                 push(x);
             }
         }
+        "opus" => {
+            // keep the original audio stream, no re-encoding
+            for x in ["-x", "--audio-format", "best"] {
+                push(x);
+            }
+        }
         _ => {
             push("--merge-output-format");
-            push("mp4");
+            // first container that can hold the streams without re-encoding
+            push(if j.container == "mp4" { "mp4" } else { "webm/mp4/mkv" });
         }
     }
     if !j.sub_langs.is_empty() && (j.write_subs || j.write_auto_subs) {
@@ -701,20 +688,25 @@ mod tests {
     }
 
     #[test]
-    fn qualities_prefer_sdr_and_mark_roles() {
+    fn qualities_prefer_best_codec_and_keep_an_mp4_row() {
         let q = qualities_from(&sample());
         let ids: Vec<&str> = q.iter().map(|x| x.id.as_str()).collect();
         // 144p is dropped, the muxed 360p stream is ignored when DASH exists
-        assert_eq!(ids, ["v2160", "v1080", "v720", "mp3", "m4a"]);
+        assert_eq!(ids, ["v2160", "v1080", "e1080", "v720", "mp3", "opus", "m4a"]);
         assert_eq!(q[0].role, "best");
-        assert!(q[0].format.starts_with("401+140/"), "SDR AV1 with AAC: {}", q[0].format);
-        assert_eq!(q[0].size, Some(1_510_000_000));
-        assert_eq!(q[1].role, "edit");
-        assert!(q[1].format.starts_with("137+140/"));
-        assert!(q[1].detail.contains("H.264"));
-        assert_eq!(q[3].kind, "mp3");
-        assert_eq!(q[3].size, Some(11_000_000));
-        assert_eq!(q[4].size, Some(10_000_000));
+        assert!(q[0].format.starts_with("401+251/"), "SDR AV1 with Opus: {}", q[0].format);
+        assert_eq!(q[0].size, Some(1_511_000_000));
+        assert_eq!((q[0].container.as_str(), q[0].ext.as_str()), ("auto", "WebM"));
+        assert!(q[1].format.starts_with("399+251/"), "1080p takes AV1 over H.264: {}", q[1].format);
+        assert_eq!(q[2].role, "edit");
+        assert!(q[2].format.starts_with("137+140/"));
+        assert_eq!((q[2].container.as_str(), q[2].ext.as_str()), ("mp4", "MP4"));
+        assert!(q[3].format.starts_with("136+140/"), "H.264-only height pairs with AAC");
+        assert_eq!(q[3].ext, "MP4");
+        assert_eq!(q[4].kind, "mp3");
+        assert_eq!(q[4].size, Some(11_000_000));
+        assert_eq!(q[5].kind, "opus");
+        assert_eq!(q[6].size, Some(10_000_000));
     }
 
     #[test]
@@ -740,7 +732,7 @@ mod tests {
     fn args_are_safe_and_complete() {
         let j = Job {
             id: "1".into(), url: "-https://evil".into(), video_id: None, format: "137+140".into(),
-            kind: "video".into(), sub_langs: vec!["ko".into(), "en".into()], write_subs: true,
+            kind: "video".into(), container: "auto".into(), sub_langs: vec!["ko".into(), "en".into()], write_subs: true,
             write_auto_subs: true, sub_format: "srt".into(), thumbnail: true, thumb_format: "jpg".into(),
             description: false, out_dir: "C:/out".into(), name_tpl: "title_id".into(), cookies: None, playlist: false,
         };
@@ -752,6 +744,10 @@ mod tests {
         }
         assert!(a.contains(&"deno:C:/bin/deno.exe".to_string()));
         assert!(a.contains(&"ko,en".to_string()));
+        assert!(a.contains(&"webm/mp4/mkv".to_string()));
+        let mp4 = build_args(&Job { container: "mp4".into(), ..j }, "C:/bin", None);
+        let i = mp4.iter().position(|x| x == "--merge-output-format").unwrap();
+        assert_eq!(mp4[i + 1], "mp4");
     }
 
     #[test]

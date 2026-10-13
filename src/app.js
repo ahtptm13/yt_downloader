@@ -196,6 +196,7 @@ function renderOptions() {
       <span class="radio" aria-hidden="true"></span>
       <span class="q">${esc(q.label)}</span>
       <span class="detail">${esc(q.detail)}</span>${tag}
+      <span class="side mono" style="flex:0 0 44px;text-align:right">${esc(q.ext || '')}</span>
       <span class="size">${q.size ? '약 ' + fmtBytes(q.size) : ''}</span>
     </button>`;
   }).join('');
@@ -288,7 +289,7 @@ async function runProbe(force = false) {
 /* ---------- jobs ---------- */
 
 function summaryFor(q, subsCount, thumb) {
-  const parts = [q.kind === 'video' ? `${q.label} MP4` : q.kind.toUpperCase()];
+  const parts = [q.kind === 'video' ? `${q.label} ${q.ext || ''}`.trim() : (q.ext || q.kind.toUpperCase())];
   if (subsCount) parts.push(`자막 ${subsCount}개`);
   if (thumb) parts.push('썸네일');
   return parts.join(' · ');
@@ -308,6 +309,7 @@ function enqueue() {
     videoId: p.kind === 'video' ? p.id : null,
     format: q.format,
     kind: q.kind,
+    container: q.container || 'auto',
     subLangs: subCodes,
     writeSubs: subObjs.some((s) => !s.auto),
     writeAutoSubs: subObjs.some((s) => s.auto || s.playlist),
