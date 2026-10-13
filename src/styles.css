@@ -146,7 +146,7 @@ button.row:hover { background: #181A1E; }
 .row .q { flex: 0 0 64px; font-family: var(--mono); font-weight: 500; }
 .row .detail { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .side { flex: 0 0 auto; font-size: 12px; color: var(--muted); }
-.row .size { flex: 0 0 76px; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.row .size { flex: 0 0 72px; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .row.link { color: var(--accent); font-size: 13px; min-height: 44px; }
 .radio {
   flex: 0 0 auto; width: 18px; height: 18px; border-radius: 9px; border: 2px solid var(--off);
@@ -166,6 +166,12 @@ button.row:hover { background: #181A1E; }
 .tag { flex: 0 0 auto; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; }
 .tag.best { color: var(--accent-ink); background: var(--accent); }
 .tag.edit { color: #9FD4FF; background: #132331; }
+
+.pick { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.pick .res { flex: 0 0 160px; }
+.pick .codec { flex: 1 1 260px; min-width: 0; }
+.row .codecname { flex: 0 0 auto; font-family: var(--mono); font-weight: 500; }
+.row .ext { flex: 0 0 40px; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); }
 
 /* buttons */
 .btn-primary {

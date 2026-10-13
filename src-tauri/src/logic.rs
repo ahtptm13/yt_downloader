@@ -9,6 +9,10 @@ use std::collections::{BTreeSet, HashSet};
 #[derive(Serialize, Clone, Debug)]
 pub struct Quality {
     pub id: String,
+    /// resolution group shown in the left list: "2160p", "1080p", "음원만"
+    pub group: String,
+    /// codec shown in the right list: "AV1", "VP9", "H.264", "MP3"...
+    pub codec: String,
     pub label: String,
     pub detail: String,
     /// "best" | "edit" | "" — used for the row badge and default selection
@@ -110,26 +114,17 @@ fn codec_name(vc: &str) -> &'static str {
     }
 }
 
-/// Quality order for picking the best stream at one height, the same order
-/// yt-dlp itself uses: AV1 > VP9 > HEVC > H.264.
-fn codec_rank(vc: &str) -> u8 {
-    match codec_name(vc) {
-        "AV1" => 4,
-        "VP9" => 3,
-        "HEVC" => 2,
-        "H.264" => 1,
-        _ => 0,
-    }
-}
-
 fn is_sdr(f: &Value) -> bool {
     matches!(f["dynamic_range"].as_str(), None | Some("SDR"))
 }
 
-fn q(id: &str, label: &str, detail: &str, role: &str, size: Option<u64>, format: &str, kind: &str, container: &str, ext: &str) -> Quality {
+#[allow(clippy::too_many_arguments)]
+fn q(id: &str, group: &str, codec: &str, detail: &str, role: &str, size: Option<u64>, format: &str, kind: &str, container: &str, ext: &str) -> Quality {
     Quality {
         id: id.into(),
-        label: label.into(),
+        group: group.into(),
+        codec: codec.into(),
+        label: group.into(),
         detail: detail.into(),
         role: role.into(),
         size,
@@ -140,22 +135,51 @@ fn q(id: &str, label: &str, detail: &str, role: &str, size: Option<u64>, format:
     }
 }
 
+pub const AUDIO_GROUP: &str = "음원만";
+
 pub fn audio_rows(best_audio: Option<u64>, best_m4a: Option<u64>, best_is_opus: bool) -> Vec<Quality> {
-    let mut v = vec![q("mp3", "음원", "MP3 변환", "", best_audio, "ba/b", "mp3", "auto", "MP3")];
+    let mut v = Vec::new();
     if best_is_opus {
-        v.push(q("opus", "음원", "Opus · 최고 음질 원본", "", best_audio, "ba/b", "opus", "auto", "Opus"));
+        v.push(q("opus", AUDIO_GROUP, "Opus", "최고 음질 원본 · 재인코딩 없음", "", best_audio, "ba/b", "opus", "auto", "Opus"));
     }
-    v.push(q("m4a", "음원", "M4A · 편집 호환", "", best_m4a, "ba[ext=m4a]/ba/b", "m4a", "auto", "M4A"));
+    v.push(q("m4a", AUDIO_GROUP, "AAC", "M4A · 편집 호환", "", best_m4a, "ba[ext=m4a]/ba/b", "m4a", "auto", "M4A"));
+    v.push(q("mp3", AUDIO_GROUP, "MP3", "MP3로 변환", "", best_audio, "ba/b", "mp3", "auto", "MP3"));
     v
 }
 
 /// Generic choices when individual formats are unknown (playlists).
 pub fn presets() -> Vec<Quality> {
-    let mut v = vec![
-        q("vbest", "최고", "가장 높은 해상도 · 원본 코덱", "best", None, "bv*+ba/b", "video", "auto", "WebM"),
-        q("e1080", "1080p", "H.264 MP4", "edit", None, "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[height<=1080]/b", "video", "mp4", "MP4"),
-        q("v720", "720p", "원본 코덱", "", None, "bv*[height<=720]+ba/b[height<=720]/b", "video", "auto", "WebM"),
-    ];
+    let mut v = Vec::new();
+    for (h, label) in [(0u64, "최고"), (2160, "2160p"), (1440, "1440p"), (1080, "1080p"), (720, "720p")] {
+        let cap = if h == 0 { String::new() } else { format!("[height<={}]", h) };
+        let best_role = if h == 0 { "best" } else { "" };
+        v.push(q(
+            &format!("p{}-best", h),
+            label,
+            "원본 코덱",
+            "영상마다 가장 좋은 코덱 (AV1·VP9)",
+            best_role,
+            None,
+            &format!("bv*{c}+ba/b{c}/b", c = cap),
+            "video",
+            "auto",
+            "WebM",
+        ));
+        if h != 0 && h <= 1080 {
+            v.push(q(
+                &format!("p{}-h264", h),
+                label,
+                "H.264",
+                "편집 호환",
+                if h == 1080 { "edit" } else { "" },
+                None,
+                &format!("bv*[vcodec^=avc1]{c}+ba[ext=m4a]/b{c}/b", c = cap),
+                "video",
+                "mp4",
+                "MP4",
+            ));
+        }
+    }
     v.extend(audio_rows(None, None, true));
     v
 }
@@ -164,13 +188,17 @@ fn pick_max<'a>(items: &[&'a Value], key: impl Fn(&Value) -> (u8, u8, i64, i64))
     items.iter().copied().max_by_key(|f| key(f))
 }
 
-fn fps_detail(v: &Value, codec: &str) -> String {
-    match num(&v["fps"]).map(|x| x.round() as i64) {
-        Some(f) if f > 0 => format!("{}fps · {}", f, codec),
-        _ => codec.to_string(),
+fn codec_slug(codec: &str) -> &'static str {
+    match codec {
+        "AV1" => "av1",
+        "VP9" => "vp9",
+        "HEVC" => "hevc",
+        "H.264" => "h264",
+        _ => "other",
     }
 }
 
+/// Every resolution × codec (× HDR) the video offers, best first, plus audio-only rows.
 pub fn qualities_from(info: &Value) -> Vec<Quality> {
     let formats = match info["formats"].as_array() {
         Some(f) if !f.is_empty() => f,
@@ -180,6 +208,7 @@ pub fn qualities_from(info: &Value) -> Vec<Quality> {
         vcodec(f) != "none"
             && f["height"].as_u64().unwrap_or(0) > 0
             && s(&f["protocol"]) != "mhtml"
+            && !s(&f["format_id"]).is_empty()
     };
     let audios: Vec<&Value> = formats
         .iter()
@@ -211,19 +240,6 @@ pub fn qualities_from(info: &Value) -> Vec<Quality> {
         return v;
     }
 
-    // video + audio pair, the -f value with a fallback, and the size
-    let pair = |v: &Value, a: Option<&Value>, h: u64| -> (String, Option<u64>) {
-        let vid = s(&v["format_id"]);
-        let (main, size) = if !separate {
-            (vid.to_string(), fsize(v))
-        } else if let Some(a) = a {
-            (format!("{}+{}", vid, s(&a["format_id"])), fsize(v).map(|x| x + fsize(a).unwrap_or(0)))
-        } else {
-            (format!("{}+ba", vid), fsize(v))
-        };
-        (format!("{}/bv*[height<={h}]+ba/b[height<={h}]/b", main, h = h), size)
-    };
-
     let heights: BTreeSet<u64> = vids.iter().filter_map(|f| f["height"].as_u64()).collect();
     let max_h = *heights.iter().next_back().unwrap_or(&0);
     let mut rows: Vec<Quality> = Vec::new();
@@ -231,57 +247,83 @@ pub fn qualities_from(info: &Value) -> Vec<Quality> {
         if h < 360 && max_h >= 360 {
             continue;
         }
-        let at: Vec<&Value> = vids
-            .iter()
-            .copied()
-            .filter(|f| f["height"].as_u64() == Some(h) && !s(&f["format_id"]).is_empty())
-            .collect();
-        let key = |f: &Value| {
-            (
-                is_sdr(f) as u8,
-                codec_rank(vcodec(f)),
-                num(&f["fps"]).unwrap_or(0.0) as i64,
-                (num(&f["tbr"]).unwrap_or(0.0) * 10.0) as i64,
-            )
-        };
-        let Some(best) = pick_max(&at, key) else { continue };
-        let codec = codec_name(vcodec(best));
-        let mp4_codec = codec == "H.264" || codec == "HEVC";
-        // AV1/VP9 keep the best audio (Opus) in WebM; H.264 pairs with AAC in MP4
-        let audio = if mp4_codec { best_m4a.or(best_audio) } else { best_audio };
-        let (format, size) = pair(best, audio, h);
-        let mut detail = fps_detail(best, codec);
-        if !is_sdr(best) {
-            detail.push_str(" · HDR");
-        }
-        let ext = if mp4_codec || audio.map(|a| !acodec(a).starts_with("opus")).unwrap_or(false) { "MP4" } else { "WebM" };
-        rows.push(q(&format!("v{}", h), &format!("{}p", h), &detail, "", size, &format, "video", "auto", ext));
-
-        // an extra MP4 row that opens in any editor, for the highest H.264 height up to 1080p
-        let already_edit = rows.iter().any(|r| r.role == "edit");
-        if h <= 1080 && !already_edit && !mp4_codec {
-            let avcs: Vec<&Value> = at.iter().copied().filter(|f| codec_name(vcodec(f)) == "H.264" && is_sdr(f)).collect();
-            if let Some(avc) = pick_max(&avcs, key) {
-                let (format, size) = pair(avc, best_m4a.or(best_audio), h);
-                rows.push(q(
-                    &format!("e{}", h),
-                    &format!("{}p", h),
-                    &format!("{} MP4", fps_detail(avc, "H.264")),
-                    "edit",
-                    size,
-                    &format,
-                    "video",
-                    "mp4",
-                    "MP4",
-                ));
+        let group = format!("{}p", h);
+        // one row per codec and dynamic range at this height: the highest fps, then bitrate
+        let mut combos: Vec<(&'static str, bool)> = Vec::new();
+        for f in vids.iter().filter(|f| f["height"].as_u64() == Some(h)) {
+            let c = (codec_name(vcodec(f)), is_sdr(f));
+            if !combos.contains(&c) {
+                combos.push(c);
             }
+        }
+        combos.sort_by_key(|(c, sdr)| (std::cmp::Reverse(*sdr), std::cmp::Reverse(codec_rank_name(c))));
+        for (codec, sdr) in combos {
+            let cands: Vec<&Value> = vids
+                .iter()
+                .copied()
+                .filter(|f| f["height"].as_u64() == Some(h) && codec_name(vcodec(f)) == codec && is_sdr(f) == sdr)
+                .collect();
+            let Some(v) = pick_max(&cands, |f| {
+                (0, 0, num(&f["fps"]).unwrap_or(0.0) as i64, (num(&f["tbr"]).unwrap_or(0.0) * 10.0) as i64)
+            }) else {
+                continue;
+            };
+            let mp4_codec = codec == "H.264" || codec == "HEVC";
+            // AV1/VP9 keep the best audio (Opus) in WebM; H.264 pairs with AAC in MP4
+            let audio = if mp4_codec { best_m4a.or(best_audio) } else { best_audio };
+            let vid = s(&v["format_id"]);
+            let (main, size) = if !separate {
+                (vid.to_string(), fsize(v))
+            } else if let Some(a) = audio {
+                (format!("{}+{}", vid, s(&a["format_id"])), fsize(v).map(|x| x + fsize(a).unwrap_or(0)))
+            } else {
+                (format!("{}+ba", vid), fsize(v))
+            };
+            let mut detail = match num(&v["fps"]).map(|x| x.round() as i64) {
+                Some(f) if f > 0 => format!("{}fps", f),
+                _ => String::new(),
+            };
+            if !sdr {
+                detail.push_str(if detail.is_empty() { "HDR" } else { " · HDR" });
+            }
+            let ext = if mp4_codec || audio.map(|a| !acodec(a).starts_with("opus")).unwrap_or(false) { "MP4" } else { "WebM" };
+            rows.push(q(
+                &format!("v{}-{}{}", h, codec_slug(codec), if sdr { "" } else { "-hdr" }),
+                &group,
+                codec,
+                &detail,
+                "",
+                size,
+                &format!("{}/bv*[height<={h}]+ba/b[height<={h}]/b", main, h = h),
+                "video",
+                if mp4_codec { "mp4" } else { "auto" },
+                ext,
+            ));
         }
     }
     if let Some(first) = rows.first_mut() {
         first.role = "best".into();
     }
+    // highest H.264 up to 1080p: opens in any editor
+    if let Some(edit) = rows
+        .iter_mut()
+        .filter(|r| r.role.is_empty() && r.codec == "H.264" && !r.id.ends_with("-hdr"))
+        .find(|r| r.group.trim_end_matches('p').parse::<u64>().map(|h| h <= 1080).unwrap_or(false))
+    {
+        edit.role = "edit".into();
+    }
     rows.extend(audio_rows(best_audio.and_then(fsize), best_m4a.and_then(fsize), best_is_opus));
     rows
+}
+
+fn codec_rank_name(c: &str) -> u8 {
+    match c {
+        "AV1" => 4,
+        "VP9" => 3,
+        "HEVC" => 2,
+        "H.264" => 1,
+        _ => 0,
+    }
 }
 
 fn sub_name(list: &Value, code: &str) -> String {
@@ -688,25 +730,31 @@ mod tests {
     }
 
     #[test]
-    fn qualities_prefer_best_codec_and_keep_an_mp4_row() {
+    fn every_resolution_and_codec_is_offered() {
         let q = qualities_from(&sample());
         let ids: Vec<&str> = q.iter().map(|x| x.id.as_str()).collect();
-        // 144p is dropped, the muxed 360p stream is ignored when DASH exists
-        assert_eq!(ids, ["v2160", "v1080", "e1080", "v720", "mp3", "opus", "m4a"]);
-        assert_eq!(q[0].role, "best");
-        assert!(q[0].format.starts_with("401+251/"), "SDR AV1 with Opus: {}", q[0].format);
-        assert_eq!(q[0].size, Some(1_511_000_000));
-        assert_eq!((q[0].container.as_str(), q[0].ext.as_str()), ("auto", "WebM"));
-        assert!(q[1].format.starts_with("399+251/"), "1080p takes AV1 over H.264: {}", q[1].format);
-        assert_eq!(q[2].role, "edit");
-        assert!(q[2].format.starts_with("137+140/"));
-        assert_eq!((q[2].container.as_str(), q[2].ext.as_str()), ("mp4", "MP4"));
-        assert!(q[3].format.starts_with("136+140/"), "H.264-only height pairs with AAC");
-        assert_eq!(q[3].ext, "MP4");
-        assert_eq!(q[4].kind, "mp3");
-        assert_eq!(q[4].size, Some(11_000_000));
-        assert_eq!(q[5].kind, "opus");
-        assert_eq!(q[6].size, Some(10_000_000));
+        // 144p is dropped, the muxed 360p stream is ignored when DASH exists; SDR before HDR, AV1 > VP9 > H.264
+        assert_eq!(
+            ids,
+            ["v2160-av1", "v2160-av1-hdr", "v1080-av1", "v1080-vp9", "v1080-h264", "v720-h264", "opus", "m4a", "mp3"]
+        );
+        let by = |id: &str| q.iter().find(|x| x.id == id).unwrap();
+        let best = by("v2160-av1");
+        assert_eq!((best.role.as_str(), best.group.as_str(), best.codec.as_str()), ("best", "2160p", "AV1"));
+        assert!(best.format.starts_with("401+251/"), "AV1 with Opus: {}", best.format);
+        assert_eq!(best.size, Some(1_511_000_000));
+        assert_eq!((best.container.as_str(), best.ext.as_str()), ("auto", "WebM"));
+        assert_eq!(by("v2160-av1-hdr").detail, "60fps · HDR");
+        assert!(by("v1080-vp9").format.starts_with("248+251/"));
+        assert_eq!(by("v1080-vp9").size, Some(211_000_000));
+        let edit = by("v1080-h264");
+        assert_eq!(edit.role, "edit");
+        assert!(edit.format.starts_with("137+140/"), "H.264 pairs with AAC");
+        assert_eq!((edit.container.as_str(), edit.ext.as_str()), ("mp4", "MP4"));
+        assert_eq!(by("v720-h264").role, "");
+        assert_eq!(by("opus").group, AUDIO_GROUP);
+        assert_eq!(by("mp3").size, Some(11_000_000));
+        assert_eq!(by("m4a").size, Some(10_000_000));
     }
 
     #[test]
@@ -726,6 +774,7 @@ mod tests {
         assert_eq!(p.kind, "playlist");
         assert_eq!(p.count, Some(3));
         assert_eq!(p.qualities[0].role, "best");
+        assert!(p.qualities.iter().any(|x| x.role == "edit" && x.container == "mp4"));
     }
 
     #[test]

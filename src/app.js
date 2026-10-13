@@ -38,6 +38,7 @@ const S = {
   clipNote: false,
   lastClip: '',
   qId: null,
+  group: null,
   subs: new Set(),
   showAllSubs: false,
   thumb: settings.withThumb,
@@ -189,14 +190,28 @@ function renderOptions() {
   $('options').classList.toggle('hidden', !p || S.probing);
   if (!p) return;
 
-  $('qualityList').innerHTML = p.qualities.map((q) => {
+  const groups = [];
+  for (const q of p.qualities) if (!groups.includes(q.group)) groups.push(q.group);
+  if (!groups.includes(S.group)) S.group = groups[0];
+  $('resList').innerHTML = groups.map((g) => {
+    const sel = g === S.group;
+    const codecs = [...new Set(p.qualities.filter((q) => q.group === g).map((q) => q.codec))].join(' · ');
+    return `<button class="row${sel ? ' sel' : ''}" aria-pressed="${sel}" data-act="res" data-id="${esc(g)}" style="min-height:56px">
+      <span class="radio" aria-hidden="true"></span>
+      <span class="main"><span class="mono" style="font-weight:500">${esc(g)}</span><span class="sub ellipsis">${esc(codecs)}</span></span>
+    </button>`;
+  }).join('');
+
+  $('qualityList').innerHTML = p.qualities.filter((q) => q.group === S.group).map((q) => {
     const sel = q.id === S.qId;
     const tag = q.role === 'best' ? '<span class="tag best">최고 화질</span>' : q.role === 'edit' ? '<span class="tag edit">편집 호환</span>' : '';
-    return `<button class="row${sel ? ' sel' : ''}" aria-pressed="${sel}" data-act="quality" data-id="${esc(q.id)}">
+    return `<button class="row${sel ? ' sel' : ''}" aria-pressed="${sel}" data-act="quality" data-id="${esc(q.id)}" style="min-height:56px">
       <span class="radio" aria-hidden="true"></span>
-      <span class="q">${esc(q.label)}</span>
-      <span class="detail">${esc(q.detail)}</span>${tag}
-      <span class="side mono" style="flex:0 0 44px;text-align:right">${esc(q.ext || '')}</span>
+      <span class="main">
+        <span style="display:flex;align-items:center;gap:8px;min-width:0"><span class="codecname">${esc(q.codec)}</span>${tag}</span>
+        ${q.detail ? `<span class="sub ellipsis">${esc(q.detail)}</span>` : ''}
+      </span>
+      <span class="ext">${esc(q.ext || '')}</span>
       <span class="size">${q.size ? '약 ' + fmtBytes(q.size) : ''}</span>
     </button>`;
   }).join('');
@@ -275,6 +290,7 @@ async function runProbe(force = false) {
     if (seq !== S.probeSeq) return;
     S.probe = p;
     S.qId = pickDefaultQuality(p);
+    S.group = (p.qualities.find((q) => q.id === S.qId) || p.qualities[0] || {}).group;
     S.subs = defaultSubs(p);
     S.thumb = settings.withThumb;
     S.desc = settings.withDesc;
@@ -289,7 +305,7 @@ async function runProbe(force = false) {
 /* ---------- jobs ---------- */
 
 function summaryFor(q, subsCount, thumb) {
-  const parts = [q.kind === 'video' ? `${q.label} ${q.ext || ''}`.trim() : (q.ext || q.kind.toUpperCase())];
+  const parts = [q.kind === 'video' ? `${q.group} ${q.codec} ${q.ext || ''}`.trim() : (q.ext || q.kind.toUpperCase())];
   if (subsCount) parts.push(`자막 ${subsCount}개`);
   if (thumb) parts.push('썸네일');
   return parts.join(' · ');
@@ -325,7 +341,8 @@ function enqueue() {
   S.jobs.push({
     id, payload, status: 'queued', stage: 'info',
     title: p.title, channel: p.kind === 'playlist' ? `재생목록 · ${p.count ?? '?'}개` : p.channel,
-    thumbnail: p.thumbnail, kind: q.kind, qLabel: q.kind === 'video' ? `${q.label} · ${q.detail}` : q.detail,
+    thumbnail: p.thumbnail, kind: q.kind,
+    qLabel: [q.group === '음원만' ? '' : q.group, q.codec, q.detail, q.ext].filter(Boolean).join(' · '),
     summary: summaryFor(q, subCodes.length, S.thumb), size: q.size,
   });
   // remember choices for next time
@@ -668,6 +685,15 @@ document.addEventListener('click', async (e) => {
   const job = id ? S.jobs.find((j) => j.id === id) : null;
   switch (act) {
     case 'quality': S.qId = id; renderMain(); break;
+    case 'res': {
+      // keep the same codec when it exists at the new resolution
+      const cur = selectedQuality();
+      const inGroup = S.probe.qualities.filter((q) => q.group === id);
+      const same = cur && inGroup.find((q) => q.codec === cur.codec && q.id.endsWith('-hdr') === cur.id.endsWith('-hdr'));
+      S.group = id;
+      S.qId = (same || inGroup[0] || {}).id;
+      renderMain(); break;
+    }
     case 'sub': {
       const code = el.dataset.code;
       if (S.subs.has(code)) S.subs.delete(code); else S.subs.add(code);
