@@ -16,6 +16,9 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -31,15 +34,46 @@ jobs:
 
       - run: npm install
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build installer
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-        with:
-          tagName: v__VERSION__
-          releaseName: 'Grabber v__VERSION__'
-          releaseBody: '처음 설치할 때는 Grabber_x.x.x_x64-setup.exe를 받아 실행하세요. 이미 설치돼 있으면 앱이 새 버전을 알아서 받아요.'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
+        run: |
+          set -o pipefail
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is missing"; exit 1
+          fi
+          npm run tauri build 2>&1 | tee build.log || {
+            # surface the end of the log as an annotation so the failure is readable anywhere
+            tail -n 60 build.log | sed 's/\x1b\[[0-9;]*m//g' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log('::error title=build failed::'+s.replace(/%/g,'%25').replace(/\r/g,'').replace(/\n/g,'%0A')))"
+            exit 1
+          }
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          TAG="v$VERSION"
+          DIR=src-tauri/target/release/bundle/nsis
+          EXE=$(ls "$DIR"/*-setup.exe | head -n1)
+          NAME=$(basename "$EXE")
+          SIG=$(cat "$EXE.sig")
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/$NAME"
+          node -e "
+            const fs=require('fs');
+            const entry={signature:process.argv[2],url:process.argv[3]};
+            fs.writeFileSync('latest.json', JSON.stringify({
+              version: process.argv[1],
+              notes: 'Grabber ' + process.argv[1],
+              pub_date: new Date().toISOString(),
+              platforms: { 'windows-x86_64': entry, 'windows-x86_64-nsis': entry }
+            }, null, 2));
+          " "$VERSION" "$SIG" "$URL"
+          cat latest.json
+          NOTES="처음 설치할 때는 $NAME 을 받아 실행하세요. 이미 설치돼 있으면 앱이 새 버전을 알아서 받아요."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$EXE" "$EXE.sig" latest.json --clobber
+          else
+            gh release create "$TAG" "$EXE" "$EXE.sig" latest.json --target "$GITHUB_SHA" --title "Grabber $TAG" --notes "$NOTES"
+          fi
