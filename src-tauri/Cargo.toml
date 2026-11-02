@@ -2,6 +2,8 @@
 name = "grabber"
 version = "0.1.3"
 description = "yt-dlp 기반 유튜브 다운로더"
+authors = ["ahtptm13"]
+repository = "https://github.com/ahtptm13/yt_downloader"
 edition = "2021"
 
 [lib]
@@ -24,6 +26,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 futures-util = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["process", "io-util", "fs", "rt", "macros"] }
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [profile.release]
 codegen-units = 1

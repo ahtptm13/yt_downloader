@@ -700,6 +700,32 @@ pub fn subtitle_warning(stderr: &str) -> Option<String> {
     Some(format!("자막 {}개를 받지 못했어요 ({}) · {}", langs.len(), langs.join(", "), why))
 }
 
+/// The SHA-256 a checksum file lists for `file`, lowercase.
+/// Handles `<hash>  <name>` lists (yt-dlp, FFmpeg-Builds) and single-hash
+/// files such as Deno's PowerShell-style `.sha256sum`.
+pub fn expected_sha256(sums: &str, file: &str) -> Option<String> {
+    let is_hash = |t: &str| t.len() == 64 && t.chars().all(|c| c.is_ascii_hexdigit());
+    let hashes = |line: &str| -> Vec<String> {
+        line.split(|c: char| !c.is_ascii_hexdigit())
+            .filter(|t| is_hash(t))
+            .map(|t| t.to_ascii_lowercase())
+            .collect()
+    };
+    for line in sums.lines() {
+        let names_file = line.split_whitespace().last().map(|t| {
+            let t = t.trim_start_matches('*');
+            t == file || t.ends_with(&format!("/{}", file)) || t.ends_with(&format!("\\{}", file))
+        });
+        if names_file == Some(true) {
+            if let Some(h) = hashes(line).into_iter().next() {
+                return Some(h);
+            }
+        }
+    }
+    let all = hashes(sums);
+    (all.len() == 1).then(|| all[0].clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,6 +860,30 @@ mod tests {
         assert!(w.contains("ko") && w.contains("막았어요"), "{}", w);
         assert!(subtitle_warning("WARNING: something else").is_none());
         assert!(has_hard_error("ERROR: Postprocessing: Conversion failed!"));
+    }
+
+    #[test]
+    fn checksum_files_are_read_correctly() {
+        let ytdlp = "aaaa000000000000000000000000000000000000000000000000000000000001  yt-dlp\n\
+                     F5389D3698ECDE4EF06F4E6B1CE0294FE9AC1396228C8990B8D3416D6D177A7D  yt-dlp.exe\n\
+                     bbbb000000000000000000000000000000000000000000000000000000000002  yt-dlp_x86.exe\n";
+        assert_eq!(
+            expected_sha256(ytdlp, "yt-dlp.exe").as_deref(),
+            Some("f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d")
+        );
+        let deno = "\r\nAlgorithm : SHA256\r\nHash      : CBA84B26E0DF5AE7F74FC66B86A95B866872A86292EBD84FA1E959927EDD93BF\r\nPath      : C:\\a\\deno\\target\\release\\deno-x86_64-pc-windows-msvc.zip\r\n";
+        assert_eq!(
+            expected_sha256(deno, "deno-x86_64-pc-windows-msvc.zip").as_deref(),
+            Some("cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf")
+        );
+        let ff = "10d21844a75a17dc6bc4edf71204f7e727431dad2f5096b1f919046ed5fca00f  ffmpeg-master-latest-win64-gpl.zip\n\
+                  20d21844a75a17dc6bc4edf71204f7e727431dad2f5096b1f919046ed5fca00f  ffmpeg-master-latest-win64-gpl-shared.zip\n";
+        assert_eq!(
+            expected_sha256(ff, "ffmpeg-master-latest-win64-gpl.zip").as_deref(),
+            Some("10d21844a75a17dc6bc4edf71204f7e727431dad2f5096b1f919046ed5fca00f")
+        );
+        assert!(expected_sha256(ff, "missing.zip").is_none(), "never guess between several hashes");
+        assert!(expected_sha256("<html>not found</html>", "x").is_none());
     }
 
     #[test]

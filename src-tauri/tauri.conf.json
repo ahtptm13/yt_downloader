@@ -32,6 +32,11 @@
     "targets": [
       "nsis"
     ],
+    "publisher": "ahtptm13",
+    "copyright": "Copyright © 2026 ahtptm13",
+    "category": "Video",
+    "shortDescription": "yt-dlp 기반 유튜브 다운로더",
+    "longDescription": "유튜브 영상, 자막, 썸네일을 받는 데스크톱 앱. 소스: https://github.com/ahtptm13/yt_downloader",
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",

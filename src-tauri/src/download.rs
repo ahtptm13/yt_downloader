@@ -4,13 +4,75 @@ use crate::logic::{self, Job, Probe, Tracker};
 use crate::tools::{bin_dir, command, err, tool_path};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 
+/// Groups a download's whole process tree (yt-dlp and the ffmpeg it starts)
+/// in a Windows Job Object, so cancelling stops all of it without shelling
+/// out to taskkill, and closing the app never leaves orphans behind.
+#[cfg(windows)]
+mod proc_group {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    pub struct Group(HANDLE);
+    // the handle is only used through thread-safe Win32 calls
+    unsafe impl Send for Group {}
+    unsafe impl Sync for Group {}
+
+    impl Group {
+        pub fn new() -> Option<Group> {
+            unsafe {
+                let h = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if h.is_null() {
+                    return None;
+                }
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                SetInformationJobObject(
+                    h,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const core::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                Some(Group(h))
+            }
+        }
+
+        pub fn add(&self, process: HANDLE) -> bool {
+            unsafe { AssignProcessToJobObject(self.0, process) != 0 }
+        }
+
+        pub fn stop(&self) {
+            unsafe {
+                TerminateJobObject(self.0, 1);
+            }
+        }
+    }
+
+    impl Drop for Group {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+struct Running {
+    #[cfg(windows)]
+    group: Option<proc_group::Group>,
+    #[allow(dead_code)]
+    pid: u32,
+}
+
 #[derive(Default)]
 pub struct Jobs {
-    pids: Mutex<HashMap<String, u32>>,
+    running: Mutex<HashMap<String, Arc<Running>>>,
     cancelled: Mutex<HashSet<String>>,
 }
 
@@ -91,7 +153,17 @@ pub async fn start_download(app: AppHandle, jobs: State<'_, Jobs>, job: Job) -> 
         .spawn()
         .map_err(|e| format!("다운로드 엔진을 실행하지 못했어요: {}", e))?;
     let pid = child.id().unwrap_or(0);
-    jobs.pids.lock().unwrap().insert(job.id.clone(), pid);
+    #[cfg(windows)]
+    let running = {
+        let group = proc_group::Group::new();
+        if let (Some(g), Some(h)) = (&group, child.raw_handle()) {
+            g.add(h as windows_sys::Win32::Foundation::HANDLE);
+        }
+        Running { group, pid }
+    };
+    #[cfg(not(windows))]
+    let running = Running { pid };
+    jobs.running.lock().unwrap().insert(job.id.clone(), Arc::new(running));
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -120,7 +192,8 @@ pub async fn start_download(app: AppHandle, jobs: State<'_, Jobs>, job: Job) -> 
         let stderr_text = err_task.await.unwrap_or_default();
         let success = exited_ok && !logic::has_hard_error(&stderr_text);
         let state = app2.state::<Jobs>();
-        state.pids.lock().unwrap().remove(&id);
+        // dropping the group closes it, which also ends any leftover ffmpeg
+        state.running.lock().unwrap().remove(&id);
         let cancelled = state.cancelled.lock().unwrap().remove(&id);
         if cancelled {
             cleanup_partials(&job);
@@ -155,24 +228,22 @@ fn cleanup_partials(job: &Job) {
 
 #[tauri::command]
 pub async fn cancel_download(jobs: State<'_, Jobs>, id: String) -> Result<(), String> {
-    let pid = jobs.pids.lock().unwrap().get(&id).copied();
-    let Some(pid) = pid else { return Ok(()) };
+    let running = jobs.running.lock().unwrap().get(&id).cloned();
+    let Some(running) = running else { return Ok(()) };
     jobs.cancelled.lock().unwrap().insert(id);
     #[cfg(windows)]
     {
-        // /T also stops the ffmpeg that yt-dlp may have started
-        let mut c = tokio::process::Command::new("taskkill");
-        c.args(["/PID", &pid.to_string(), "/T", "/F"]);
-        c.creation_flags(0x0800_0000);
-        let _ = c.output().await;
+        if let Some(g) = &running.group {
+            g.stop();
+        }
     }
     #[cfg(not(windows))]
     {
-        let _ = tokio::process::Command::new("kill").arg(pid.to_string()).output().await;
+        let _ = tokio::process::Command::new("kill").arg(running.pid.to_string()).output().await;
     }
     Ok(())
 }
 
 pub fn any_running(app: &AppHandle) -> bool {
-    !app.state::<Jobs>().pids.lock().unwrap().is_empty()
+    !app.state::<Jobs>().running.lock().unwrap().is_empty()
 }

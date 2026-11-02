@@ -1,0 +1,44 @@
+name: Lockfiles
+
+# Regenerates Cargo.lock and package-lock.json and commits them to main.
+# Run it by pushing to the `update-locks` branch (or "Run workflow")
+# whenever dependencies should be refreshed; releases build from the
+# committed lockfiles only.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['update-locks']
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Generate lockfiles
+        run: |
+          (cd src-tauri && cargo generate-lockfile)
+          npm install --package-lock-only --no-audit --no-fund
+
+      - name: Commit to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/Cargo.lock package-lock.json
+          if git diff --cached --quiet; then echo "lockfiles unchanged"; exit 0; fi
+          git commit -m "Update lockfiles"
+          git push origin HEAD:main

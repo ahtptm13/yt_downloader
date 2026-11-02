@@ -2,7 +2,9 @@
 //! Everything lives in the user's local app data folder, so no admin rights
 //! are ever needed and yt-dlp can replace itself.
 
+use crate::logic;
 use futures_util::StreamExt;
+use sha2::{Digest, Sha256};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -18,6 +20,13 @@ const FFMPEG_ZIP: &str =
     "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
 const DENO_ZIP: &str =
     "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
+// official checksum lists published next to each download
+const YTDLP_STABLE_SUMS: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS";
+const YTDLP_NIGHTLY_SUMS: &str =
+    "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/SHA2-256SUMS";
+const FFMPEG_SUMS: &str = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/checksums.sha256";
+const DENO_SUMS: &str =
+    "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip.sha256sum";
 const FFMPEG_MAX_AGE_DAYS: u64 = 60;
 
 pub const TOOLS: [&str; 3] = ["yt-dlp", "ffmpeg", "deno"];
@@ -166,7 +175,24 @@ pub async fn status(app: &AppHandle, channel: &str, check_latest: bool) -> Vec<T
     v
 }
 
-async fn download_file(app: &AppHandle, name: &str, url: &str, dest: &Path) -> Result<(), String> {
+async fn fetch_expected_hash(name: &str, sums_url: &str, file: &str) -> Result<String, String> {
+    let text = http()
+        .get(sums_url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("{} 체크섬을 받지 못했어요: {}", name, e))?
+        .text()
+        .await
+        .map_err(err)?;
+    logic::expected_sha256(&text, file).ok_or_else(|| format!("{} 체크섬 목록에서 {}를 찾지 못했어요.", name, file))
+}
+
+/// Downloads `url` to `dest` and refuses to keep it unless its SHA-256
+/// matches the official checksum list at `sums_url`.
+async fn download_verified(app: &AppHandle, name: &str, url: &str, sums_url: &str, dest: &Path) -> Result<(), String> {
+    let file = url.rsplit('/').next().unwrap_or(url);
+    let expected = fetch_expected_hash(name, sums_url, file).await?;
     let resp = http()
         .get(url)
         .send()
@@ -175,13 +201,15 @@ async fn download_file(app: &AppHandle, name: &str, url: &str, dest: &Path) -> R
         .error_for_status()
         .map_err(|e| format!("{} 받기 실패: {}", name, e))?;
     let total = resp.content_length().unwrap_or(0);
-    let mut file = tokio::fs::File::create(dest).await.map_err(err)?;
+    let mut out = tokio::fs::File::create(dest).await.map_err(err)?;
+    let mut hasher = Sha256::new();
     let mut got: u64 = 0;
     let mut last = -1.0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("{} 받기 중단: {}", name, e))?;
-        file.write_all(&chunk).await.map_err(err)?;
+        hasher.update(&chunk);
+        out.write_all(&chunk).await.map_err(err)?;
         got += chunk.len() as u64;
         if total > 0 {
             let p = got as f64 * 100.0 / total as f64;
@@ -191,7 +219,16 @@ async fn download_file(app: &AppHandle, name: &str, url: &str, dest: &Path) -> R
             }
         }
     }
-    file.flush().await.map_err(err)?;
+    out.flush().await.map_err(err)?;
+    drop(out);
+    let actual: String = hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect();
+    if actual != expected {
+        let _ = tokio::fs::remove_file(dest).await;
+        return Err(format!(
+            "{} 파일이 공식 체크섬과 달라서 설치하지 않았어요. 잠시 후 다시 시도해 주세요.",
+            name
+        ));
+    }
     Ok(())
 }
 
@@ -220,9 +257,15 @@ fn extract(zip_path: &Path, wanted: &[(String, PathBuf)]) -> Result<(), String> 
     Ok(())
 }
 
-async fn install_from_zip(app: &AppHandle, name: &str, url: &str, wanted: Vec<(String, PathBuf)>) -> Result<(), String> {
+async fn install_from_zip(
+    app: &AppHandle,
+    name: &str,
+    url: &str,
+    sums_url: &str,
+    wanted: Vec<(String, PathBuf)>,
+) -> Result<(), String> {
     let zip_path = bin_dir(app).join(format!("{}.zip", name));
-    download_file(app, name, url, &zip_path).await?;
+    download_verified(app, name, url, sums_url, &zip_path).await?;
     emit(app, name, "extract", 100.0);
     let zp = zip_path.clone();
     tokio::task::spawn_blocking(move || extract(&zp, &wanted))
@@ -236,9 +279,13 @@ pub async fn install_tool(app: &AppHandle, name: &str, channel: &str) -> Result<
     tokio::fs::create_dir_all(bin_dir(app)).await.map_err(err)?;
     match name {
         "yt-dlp" => {
-            let url = if channel == "nightly" { YTDLP_NIGHTLY } else { YTDLP_STABLE };
+            let (url, sums) = if channel == "nightly" {
+                (YTDLP_NIGHTLY, YTDLP_NIGHTLY_SUMS)
+            } else {
+                (YTDLP_STABLE, YTDLP_STABLE_SUMS)
+            };
             let tmp = bin_dir(app).join("yt-dlp.download");
-            download_file(app, name, url, &tmp).await?;
+            download_verified(app, name, url, sums, &tmp).await?;
             tokio::fs::rename(&tmp, tool_path(app, name)).await.map_err(err)?;
         }
         "ffmpeg" => {
@@ -246,11 +293,11 @@ pub async fn install_tool(app: &AppHandle, name: &str, channel: &str) -> Result<
                 ("bin/ffmpeg.exe".to_string(), tool_path(app, "ffmpeg")),
                 ("bin/ffprobe.exe".to_string(), tool_path(app, "ffprobe")),
             ];
-            install_from_zip(app, name, FFMPEG_ZIP, wanted).await?;
+            install_from_zip(app, name, FFMPEG_ZIP, FFMPEG_SUMS, wanted).await?;
         }
         "deno" => {
             let wanted = vec![("deno.exe".to_string(), tool_path(app, "deno"))];
-            install_from_zip(app, name, DENO_ZIP, wanted).await?;
+            install_from_zip(app, name, DENO_ZIP, DENO_SUMS, wanted).await?;
         }
         _ => return Err(format!("unknown tool {}", name)),
     }
