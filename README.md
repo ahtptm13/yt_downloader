@@ -22,6 +22,13 @@ yt-dlp 기반 윈도우용 유튜브 다운로더. 링크를 붙여넣고 버튼
 
 릴리스 빌드에는 저장소 Secret `TAURI_SIGNING_PRIVATE_KEY`(업데이트 서명 키)가 필요합니다.
 
+빌드는 커밋된 `Cargo.lock`·`package-lock.json`만 사용하고, 빌드 액션은 커밋 단위로 고정돼 있습니다. 의존성을 갱신하려면 Cargo.toml/package.json을 고친 뒤 `update-locks` 브랜치에 푸시하세요. Lockfiles 워크플로가 잠금 파일을 새로 만들어 main에 커밋합니다.
+
+## 보안
+
+- 앱 업데이트는 업데이트 서명 키로 서명된 파일만 설치됩니다.
+- yt-dlp · Deno · ffmpeg는 각 프로젝트의 공식 SHA-256 체크섬과 일치할 때만 설치됩니다.
+
 ## 구조
 
 - `src/` — 화면 (HTML/CSS/JS, 프레임워크 없음)

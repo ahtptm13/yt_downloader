@@ -20,19 +20,21 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: 'src-tauri -> target'
 
-      - run: npm install
+      - run: npm ci --no-audit --no-fund
 
       - name: Build installer
         env:
@@ -47,7 +49,7 @@ jobs:
           echo "::add-mask::$KEY"
           export TAURI_SIGNING_PRIVATE_KEY="$KEY"
           export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-          npm run tauri build 2>&1 | tee build.log || {
+          npm run tauri build -- -- --locked 2>&1 | tee build.log || {
             # surface the end of the log as an annotation so the failure is readable anywhere
             tail -n 60 build.log | sed 's/\x1b\[[0-9;]*m//g' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log('::error title=build failed::'+s.replace(/%/g,'%25').replace(/\r/g,'').replace(/\n/g,'%0A')))"
             exit 1

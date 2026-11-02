@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "grabber"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",
